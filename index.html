@@ -1,0 +1,282 @@
+
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>英会話フレーズ帳</title>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#f3f6fc;color:#243246;margin:0}
+main{max-width:620px;margin:auto;padding:20px 16px 55px}
+h1{font-size:26px}
+.box,.card{background:white;border-radius:16px;padding:18px;margin:14px 0;border:1px solid #e1e7f1}
+button,input{font:inherit;border-radius:9px;padding:11px}
+button{border:0;background:#e4eaf5;cursor:pointer}
+input{border:1px solid #ccd5e3;box-sizing:border-box;width:100%;margin:6px 0}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.row button{flex:1}
+.primary{background:#2563eb;color:white}
+.right{background:#d7fbe4}
+.wrong{background:#ffe0e0}
+.card{min-height:230px;text-align:center;display:flex;flex-direction:column;justify-content:center;cursor:pointer}
+.card h2{font-size:27px}
+.muted{color:#64748b;font-size:13px}
+.hidden{display:none!important}
+.stats{display:flex;justify-content:space-around;text-align:center;padding:12px}
+.stats b{font-size:23px;display:block}
+#status{font-size:13px;padding:9px;background:#eef5ff;border-radius:8px;margin-top:10px;overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<main>
+<h1>英会話フレーズ帳</h1>
+<p class="muted">英語を見て意味を考え、カードをタップして答えを確認</p>
+
+<div class="box">
+<div id="loginBox">
+<input id="email" type="email" placeholder="メールアドレス" autocomplete="email">
+<input id="pass" type="password" placeholder="パスワード" autocomplete="current-password">
+<div class="row">
+<button class="primary" onclick="signIn()">ログイン</button>
+<button onclick="signUp()">新規登録</button>
+</div>
+</div>
+<div id="userBox" class="hidden">
+<span id="userEmail"></span>
+<button onclick="signOut()">ログアウト</button>
+</div>
+<div id="status">準備中です…</div>
+</div>
+
+<div class="box stats">
+<div><b id="total">0</b><span class="muted">フレーズ</span></div>
+<div><b id="rate">—</b><span class="muted">正答率</span></div>
+<div><b id="misses">0</b><span class="muted">間違えた集</span></div>
+</div>
+
+<div class="row">
+<button onclick="switchMode(false)">すべて</button>
+<button onclick="switchMode(true)">間違えた集</button>
+</div>
+
+<p id="counter" class="muted" style="text-align:center"></p>
+<div id="card" class="card" onclick="flip()">
+<p>ログインするとフレーズを表示します。</p>
+</div>
+
+<div class="row">
+<button onclick="speak()">🔊 発音を聞く</button>
+<button onclick="flip()">↻ 裏返す</button>
+</div>
+
+<div id="rating" class="row hidden" style="margin-top:10px">
+<button class="wrong" onclick="grade(false)">✕ 間違えた</button>
+<button class="right" onclick="grade(true)">✓ 答えられた</button>
+</div>
+
+<div class="row" style="margin-top:10px">
+<button onclick="move(-1)">← 前へ</button>
+<button onclick="move(1)">次へ →</button>
+</div>
+
+<p class="muted">ログイン後の正答率・学習履歴はクラウドへ保存されます。毎朝7:30の新規フレーズ自動追加は別途設定が必要です。</p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const db=window.supabase.createClient(
+'https://qwjjfberpnxbczbxzpnl.supabase.co',
+'sb_publishable_gRu-f0U7dPCaewnhEKoFnw_ICzqDrr3'
+);
+
+const el=id=>document.getElementById(id);
+const clean=s=>String(s||'').replace(/[&<>"']/g,c=>({
+'&':'&amp;','<':'&lt;','>':'&gt;',
+'"':'&quot;',"'":'&#39;'
+}[c]));
+
+let user=null,phrases=[],reviews=new Map();
+let pos=0,back=false,onlyWrong=false,busy=false;
+
+function status(s){
+el('status').textContent=s;
+}
+
+function currentList(){
+return onlyWrong
+?phrases.filter(p=>(reviews.get(p.id)?.incorrect_count||0)>0)
+:phrases;
+}
+
+function render(){
+let list=currentList();
+if(pos>=list.length)pos=0;
+
+let attempts=0,correct=0,miss=0;
+reviews.forEach(r=>{
+correct+=r.correct_count;
+attempts+=r.correct_count+r.incorrect_count;
+if(r.incorrect_count>0)miss++;
+});
+
+el('total').textContent=phrases.length;
+el('rate').textContent=attempts
+?Math.round(correct/attempts*100)+'%':'—';
+el('misses').textContent=miss;
+
+el('counter').textContent=list.length
+?(pos+1)+' / '+list.length:'0 / 0';
+
+let p=list[pos];
+el('rating').classList.toggle('hidden',!user||!p||!back);
+
+if(!p){
+el('card').innerHTML='<p>表示するフレーズがありません。</p>';
+return;
+}
+
+el('card').innerHTML=back
+?'<h2>'+clean(p.meaning)+'</h2><p>'+clean(p.example_en)+'</p><p class="muted">'+clean(p.example_ja)+'</p>'
+:'<h2>'+clean(p.phrase)+'</h2><p class="muted">タップして答えを見る</p>';
+}
+
+function flip(){
+if(!currentList().length)return;
+back=!back;
+render();
+}
+
+function move(n){
+let a=currentList();
+if(!a.length)return;
+pos=(pos+n+a.length)%a.length;
+back=false;
+render();
+}
+
+function switchMode(wrong){
+onlyWrong=wrong;
+pos=0;
+back=false;
+render();
+}
+
+function speak(){
+let p=currentList()[pos];
+if(!p||!window.speechSynthesis)return;
+let u=new SpeechSynthesisUtterance(p.phrase);
+u.lang='en-US';
+u.rate=.85;
+speechSynthesis.cancel();
+speechSynthesis.speak(u);
+}
+
+async function grade(isCorrect){
+if(busy||!user)return;
+let p=currentList()[pos];
+if(!p)return;
+busy=true;
+
+let old=reviews.get(p.id)||{
+correct_count:0,incorrect_count:0
+};
+
+let rec={
+user_id:user.id,
+phrase_id:p.id,
+correct_count:old.correct_count+(isCorrect?1:0),
+incorrect_count:old.incorrect_count+(isCorrect?0:1),
+updated_at:new Date().toISOString()
+};
+
+let {error}=await db.from('reviews').upsert(
+rec,{onConflict:'user_id,phrase_id'}
+);
+busy=false;
+
+if(error){
+status('保存エラー: '+error.message);
+return;
+}
+
+reviews.set(p.id,rec);
+status('回答結果を保存しました');
+pos=(pos+1)%Math.max(1,currentList().length);
+back=false;
+render();
+}
+
+async function load(){
+status('読み込み中…');
+
+let [p,r]=await Promise.all([
+db.from('phrases')
+.select('id,phrase,meaning,example_en,example_ja')
+.order('id'),
+db.from('reviews')
+.select('phrase_id,correct_count,incorrect_count')
+]);
+
+if(p.error||r.error){
+status('読み込みエラー: '+(p.error||r.error).message);
+return;
+}
+
+phrases=p.data||[];
+reviews=new Map(
+(r.data||[]).map(x=>[x.phrase_id,x])
+);
+pos=0;
+back=false;
+render();
+status('同期完了：'+phrases.length+'フレーズを読み込みました');
+}
+
+async function setUser(u){
+user=u;
+el('loginBox').classList.toggle('hidden',!!u);
+el('userBox').classList.toggle('hidden',!u);
+el('userEmail').textContent=u?.email||'';
+
+if(u){
+await load();
+}else{
+phrases=[];
+reviews.clear();
+render();
+status('ログインすると学習データを同期できます');
+}
+}
+
+async function signIn(){
+let {error}=await db.auth.signInWithPassword({
+email:el('email').value.trim(),
+password:el('pass').value
+});
+if(error)status(error.message);
+}
+
+async function signUp(){
+let {data,error}=await db.auth.signUp({
+email:el('email').value.trim(),
+password:el('pass').value
+});
+status(error?error.message:
+(data.session?'登録完了':'確認メールから認証してください'));
+}
+
+async function signOut(){
+let {error}=await db.auth.signOut();
+if(error)status(error.message);
+}
+
+db.auth.onAuthStateChange((event,session)=>{
+setTimeout(()=>setUser(session?.user||null),0);
+});
+
+db.auth.getSession().then(({data})=>
+setUser(data.session?.user||null)
+);
+</script>
+</body>
+</html>
